@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentMesh Cortex - Live Visualization</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AgentMesh Cortex</h1>
+            <p class="subtitle">Bio-Inspired Multi-Agent System</p>
+        </header>
+
+        <div class="story-box">
+            <h3>The Tokyo Subway Story</h3>
+            <p>In 2010, scientists placed food sources on a map of Tokyo matching major districts. 
+            A slime mold recreated Tokyo's subway system in <strong>26 hours</strong> - 
+            a marvel of engineering that took humans decades. Watch our agents do the same!</p>
+        </div>
+
+        <div class="dashboard">
+            <div class="stats-panel">
+                <h2>Live Statistics</h2>
+                <div class="stat">
+                    <label>Agents:</label>
+                    <span id="agent-count">0</span>
+                </div>
+                <div class="stat">
+                    <label>Total Edges:</label>
+                    <span id="edge-count">0</span>
+                </div>
+                <div class="stat">
+                    <label>Active Edges:</label>
+                    <span id="active-edges">0</span>
+                </div>
+                <div class="stat">
+                    <label>Avg Weight:</label>
+                    <span id="avg-weight">0.00</span>
+                </div>
+                <div class="stat highlight">
+                    <label>Reduction:</label>
+                    <span id="reduction">0%</span>
+                </div>
+                <div class="stat highlight">
+                    <label>Density:</label>
+                    <span id="density">0%</span>
+                </div>
+                <div class="stat">
+                    <label>Proposals:</label>
+                    <span id="proposals">0</span>
+                </div>
+                <div class="stat">
+                    <label>Quorum Reached:</label>
+                    <span id="quorum-count">0</span>
+                </div>
+            </div>
+
+            <div class="graph-container">
+                <h2>Network Topology</h2>
+                <svg id="graph"></svg>
+                <div class="legend">
+                    <div class="legend-item"><span class="legend-color sales"></span> Sales Agent</div>
+                    <div class="legend-item"><span class="legend-color support"></span> Support Agent</div>
+                    <div class="legend-item"><span class="legend-color inventory"></span> Inventory Agent</div>
+                    <div class="legend-item"><span class="legend-color fraud"></span> Fraud Agent</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="event-log">
+            <h2>Event Log</h2>
+            <div id="events"></div>
+        </div>
+    </div>
+
+    <script src="js/websocket.js"></script>
+    <script src="js/graph.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
