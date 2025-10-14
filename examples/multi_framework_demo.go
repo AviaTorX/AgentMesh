@@ -290,6 +290,7 @@ func createNativeAgent(messaging *messaging.KafkaMessaging, cfg *types.Config, l
 	joinEvent := types.TopologyEvent{
 		Type:      types.TopologyEventAgentJoined,
 		AgentID:   agent.ID,
+		Agent:     agent,
 		Timestamp: time.Now(),
 	}
 	messaging.PublishTopologyEvent(context.Background(), joinEvent)

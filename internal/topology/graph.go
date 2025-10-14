@@ -37,6 +37,18 @@ func (g *Graph) AddAgent(agent *types.Agent) error {
 
 	g.agents[agent.ID] = agent
 
+	// Create self-loop edge for the agent (to track its own activity)
+	selfEdge := &types.Edge{
+		ID:        types.NewEdgeID(agent.ID, agent.ID),
+		SourceID:  agent.ID,
+		TargetID:  agent.ID,
+		Weight:    g.config.InitialEdgeWeight,
+		Usage:     0,
+		CreatedAt: time.Now(),
+		LastUsed:  time.Now(),
+	}
+	g.edges[selfEdge.ID] = selfEdge
+
 	// Create bidirectional edges to all existing agents (full mesh initialization)
 	for _, existingAgent := range g.agents {
 		if existingAgent.ID == agent.ID {

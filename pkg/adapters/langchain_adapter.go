@@ -79,8 +79,9 @@ func (lc *LangChainAdapter) Start(ctx context.Context) error {
 
 	// Initialize Kafka messaging
 	cfg := &types.Config{
-		KafkaBrokers: lc.config.KafkaBrokers,
-		RedisAddr:    lc.config.RedisAddr,
+		KafkaBrokers:     lc.config.KafkaBrokers,
+		KafkaTopicPrefix: "agentmesh",
+		RedisAddr:        lc.config.RedisAddr,
 	}
 	lc.messaging = messaging.NewKafkaMessaging(cfg, lc.logger)
 
@@ -88,6 +89,7 @@ func (lc *LangChainAdapter) Start(ctx context.Context) error {
 	joinEvent := types.TopologyEvent{
 		Type:      types.TopologyEventAgentJoined,
 		AgentID:   lc.agent.ID,
+		Agent:     lc.agent,
 		Timestamp: time.Now(),
 	}
 	if err := lc.messaging.PublishTopologyEvent(ctx, joinEvent); err != nil {

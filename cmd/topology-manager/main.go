@@ -96,35 +96,25 @@ func main() {
 
 func listenToTopologyEvents(ctx context.Context, messaging *messaging.KafkaMessaging, slimeMold *topology.SlimeMoldTopology, logger *zap.Logger) {
 	// Listen to topology events (agent joined/left)
-	err := messaging.ConsumeMessages(ctx, "topology", "topology-manager", func(msg *types.Message) error {
-		// Parse topology event from message
-		eventType, ok := msg.Payload["type"].(string)
-		if !ok {
-			return nil
-		}
-
-		switch eventType {
-		case "agent_joined":
-			agentID := types.AgentID(msg.Payload["agent_id"].(string))
-			agent := &types.Agent{
-				ID:        agentID,
-				Name:      msg.Payload["name"].(string),
-				Role:      msg.Payload["role"].(string),
-				Status:    types.AgentStatusActive,
-				CreatedAt: time.Now(),
-			}
-			if err := slimeMold.AddAgent(agent); err != nil {
-				logger.Error("Failed to add agent", zap.Error(err))
-			} else {
-				logger.Info("Agent added to topology", zap.String("agent_id", string(agentID)))
+	err := messaging.ConsumeTopologyEvents(ctx, "topology", "topology-manager", func(event types.TopologyEvent) error {
+		switch event.Type {
+		case types.TopologyEventAgentJoined:
+			if event.Agent != nil {
+				if err := slimeMold.AddAgent(event.Agent); err != nil {
+					logger.Error("Failed to add agent", zap.Error(err))
+				} else {
+					logger.Info("Agent added to topology",
+						zap.String("agent_id", string(event.Agent.ID)),
+						zap.String("name", event.Agent.Name),
+						zap.String("role", event.Agent.Role))
+				}
 			}
 
-		case "agent_left":
-			agentID := types.AgentID(msg.Payload["agent_id"].(string))
-			if err := slimeMold.RemoveAgent(agentID); err != nil {
+		case types.TopologyEventAgentLeft:
+			if err := slimeMold.RemoveAgent(event.AgentID); err != nil {
 				logger.Error("Failed to remove agent", zap.Error(err))
 			} else {
-				logger.Info("Agent removed from topology", zap.String("agent_id", string(agentID)))
+				logger.Info("Agent removed from topology", zap.String("agent_id", string(event.AgentID)))
 			}
 		}
 

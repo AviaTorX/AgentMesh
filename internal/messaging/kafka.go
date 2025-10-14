@@ -180,6 +180,38 @@ func (km *KafkaMessaging) PublishTopologyEvent(ctx context.Context, event types.
 	return nil
 }
 
+// ConsumeTopologyEvents consumes topology events from a topic
+func (km *KafkaMessaging) ConsumeTopologyEvents(ctx context.Context, topic, groupID string, handler func(types.TopologyEvent) error) error {
+	reader := km.GetReader(topic, groupID)
+	defer reader.Close()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			msg, err := reader.ReadMessage(ctx)
+			if err != nil {
+				km.logger.Error("Failed to read message", zap.Error(err))
+				continue
+			}
+
+			var event types.TopologyEvent
+			if err := json.Unmarshal(msg.Value, &event); err != nil {
+				km.logger.Error("Failed to unmarshal topology event", zap.Error(err))
+				continue
+			}
+
+			if err := handler(event); err != nil {
+				km.logger.Error("Failed to handle topology event",
+					zap.Error(err),
+					zap.String("event_type", string(event.Type)),
+				)
+			}
+		}
+	}
+}
+
 // PublishProposal publishes a consensus proposal
 func (km *KafkaMessaging) PublishProposal(ctx context.Context, proposal *types.Proposal) error {
 	writer := km.GetWriter("proposals")

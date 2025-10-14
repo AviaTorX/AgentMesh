@@ -180,6 +180,7 @@ type TopologyEvent struct {
 	Type      TopologyEventType `json:"type"`
 	EdgeID    EdgeID            `json:"edge_id,omitempty"`
 	AgentID   AgentID           `json:"agent_id,omitempty"`
+	Agent     *Agent            `json:"agent,omitempty"`
 	Edge      *Edge             `json:"edge,omitempty"`
 	Timestamp time.Time         `json:"timestamp"`
 }

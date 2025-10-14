@@ -76,8 +76,9 @@ func (oa *OpenAIAdapter) Start(ctx context.Context) error {
 
 	// Initialize Kafka messaging
 	cfg := &types.Config{
-		KafkaBrokers: oa.config.KafkaBrokers,
-		RedisAddr:    oa.config.RedisAddr,
+		KafkaBrokers:     oa.config.KafkaBrokers,
+		KafkaTopicPrefix: "agentmesh",
+		RedisAddr:        oa.config.RedisAddr,
 	}
 	oa.messaging = messaging.NewKafkaMessaging(cfg, oa.logger)
 
@@ -90,6 +91,7 @@ func (oa *OpenAIAdapter) Start(ctx context.Context) error {
 	joinEvent := types.TopologyEvent{
 		Type:      types.TopologyEventAgentJoined,
 		AgentID:   oa.agent.ID,
+		Agent:     oa.agent,
 		Timestamp: time.Now(),
 	}
 	if err := oa.messaging.PublishTopologyEvent(ctx, joinEvent); err != nil {

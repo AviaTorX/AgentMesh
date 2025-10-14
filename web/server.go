@@ -97,6 +97,27 @@ func main() {
 	kafkaMessaging := messaging.NewKafkaMessaging(cfg, logger)
 	defer kafkaMessaging.Close()
 
+	// Fetch existing agents from API server to handle race condition
+	go func() {
+		time.Sleep(1 * time.Second) // Wait for API server to be ready
+		resp, err := http.Get("http://localhost:8080/api/topology")
+		if err == nil {
+			defer resp.Body.Close()
+			var topologyData struct {
+				Agents map[types.AgentID]*types.Agent `json:"agents"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&topologyData); err == nil {
+				for _, agent := range topologyData.Agents {
+					if err := slimeMold.AddAgent(agent); err == nil {
+						logger.Info("Loaded existing agent from API",
+							zap.String("agent_id", string(agent.ID)),
+							zap.String("name", agent.Name))
+					}
+				}
+			}
+		}
+	}()
+
 	// Monitor events and broadcast to WebSocket clients
 	go func() {
 		for event := range slimeMold.EventChannel() {
@@ -113,6 +134,47 @@ func main() {
 				"type":  "consensus",
 				"event": event,
 			}
+		}
+	}()
+
+	// Listen to Kafka for agent join/leave events
+	go func() {
+		err := kafkaMessaging.ConsumeTopologyEvents(ctx, "topology", "web-server", func(event types.TopologyEvent) error {
+			switch event.Type {
+			case types.TopologyEventAgentJoined:
+				if event.Agent != nil {
+					if err := slimeMold.AddAgent(event.Agent); err != nil {
+						logger.Error("Failed to add agent to web topology", zap.Error(err))
+					} else {
+						logger.Info("Agent added to web topology",
+							zap.String("agent_id", string(event.Agent.ID)),
+							zap.String("name", event.Agent.Name))
+					}
+				}
+			case types.TopologyEventAgentLeft:
+				if err := slimeMold.RemoveAgent(event.AgentID); err != nil {
+					logger.Error("Failed to remove agent from web topology", zap.Error(err))
+				} else {
+					logger.Info("Agent removed from web topology", zap.String("agent_id", string(event.AgentID)))
+				}
+			}
+			return nil
+		})
+		if err != nil && err != context.Canceled {
+			logger.Error("Topology event listener stopped", zap.Error(err))
+		}
+	}()
+
+	// Listen to Kafka for message events to reinforce edges
+	go func() {
+		err := kafkaMessaging.ConsumeMessages(ctx, "messages", "web-reinforcement", func(msg *types.Message) error {
+			if err := slimeMold.ReinforceEdge(msg.FromAgentID, msg.ToAgentID); err != nil {
+				logger.Debug("Failed to reinforce edge in web topology", zap.Error(err))
+			}
+			return nil
+		})
+		if err != nil && err != context.Canceled {
+			logger.Error("Message listener stopped", zap.Error(err))
 		}
 	}()
 
@@ -159,12 +221,12 @@ func main() {
 	http.Handle("/", http.FileServer(http.Dir("web/static")))
 
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.HTTPPort),
+		Addr:    fmt.Sprintf(":%d", cfg.WebSocketPort),
 		Handler: http.DefaultServeMux,
 	}
 
 	go func() {
-		logger.Info("Web server listening", zap.Int("port", cfg.HTTPPort))
+		logger.Info("Web server listening", zap.Int("port", cfg.WebSocketPort))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatal("Server failed", zap.Error(err))
 		}

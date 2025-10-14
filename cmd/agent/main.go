@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -130,6 +132,7 @@ func (da *DistributedAgent) Start(ctx context.Context) error {
 	joinEvent := types.TopologyEvent{
 		Type:      types.TopologyEventAgentJoined,
 		AgentID:   da.agent.ID,
+		Agent:     da.agent,
 		Timestamp: time.Now(),
 	}
 	if err := da.messaging.PublishTopologyEvent(ctx, joinEvent); err != nil {
@@ -141,6 +144,9 @@ func (da *DistributedAgent) Start(ctx context.Context) error {
 
 	// Start heartbeat sender
 	go da.sendHeartbeats()
+
+	// Start business logic simulator
+	go da.simulateBusinessLogic()
 
 	return nil
 }
@@ -310,4 +316,194 @@ func (da *DistributedAgent) sendHeartbeats() {
 			da.logger.Debug("Heartbeat")
 		}
 	}
+}
+
+// simulateBusinessLogic simulates agent behavior by sending messages to other agents
+func (da *DistributedAgent) simulateBusinessLogic() {
+	// Send initial message immediately to create edge
+	da.sendInitialMessage()
+
+	// Then wait for periodic messaging
+	time.Sleep(5 * time.Second)
+
+	// Define agent interactions based on role
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	counter := 0
+	for {
+		select {
+		case <-da.ctx.Done():
+			return
+		case <-ticker.C:
+			counter++
+
+			// Sales agent creates orders and checks inventory
+			if da.agent.Role == "sales" {
+				if counter%2 == 0 {
+					// Send to Inventory agent (role-based, will find any inventory agent)
+					da.sendToRole("inventory", types.MessageTypeTask, map[string]any{
+						"action":  "check_stock",
+						"product": fmt.Sprintf("Product-%d", counter),
+						"qty":     counter % 10,
+					})
+				}
+				if counter%3 == 0 {
+					// Send to Fraud agent
+					da.sendToRole("fraud", types.MessageTypeTask, map[string]any{
+						"action":   "verify_transaction",
+						"order_id": fmt.Sprintf("ORD-%d", counter),
+						"amount":   float64(counter * 100),
+					})
+				}
+			}
+
+			// Support agent creates tickets and escalates to Sales
+			if da.agent.Role == "support" {
+				if counter%2 == 0 {
+					da.sendToRole("sales", types.MessageTypeTask, map[string]any{
+						"action":     "escalate",
+						"ticket_id":  fmt.Sprintf("TKT-%d", counter),
+						"issue_type": "pricing_complaint",
+					})
+				}
+				if counter%3 == 0 {
+					da.sendToRole("inventory", types.MessageTypeTask, map[string]any{
+						"action":    "check_delivery",
+						"ticket_id": fmt.Sprintf("TKT-%d", counter),
+					})
+				}
+			}
+
+			// Inventory agent notifies Sales and Support
+			if da.agent.Role == "inventory" {
+				if counter%2 == 0 {
+					da.sendToRole("sales", types.MessageTypeTask, map[string]any{
+						"action":  "stock_alert",
+						"product": fmt.Sprintf("Product-%d", counter),
+						"level":   "low",
+					})
+				}
+			}
+
+			// Fraud agent reports to Sales
+			if da.agent.Role == "fraud" {
+				if counter%3 == 0 {
+					da.sendToRole("sales", types.MessageTypeTask, map[string]any{
+						"action":      "fraud_alert",
+						"transaction": fmt.Sprintf("TXN-%d", counter),
+						"risk_level":  "medium",
+					})
+				}
+			}
+		}
+	}
+}
+
+// sendInitialMessage sends an initial self-message to create the edge immediately
+func (da *DistributedAgent) sendInitialMessage() {
+	message := &types.Message{
+		ID:          fmt.Sprintf("%s-%d", da.agent.ID, time.Now().UnixNano()),
+		FromAgentID: da.agent.ID,
+		ToAgentID:   da.agent.ID,
+		Type:        types.MessageTypeTask,
+		Payload:     map[string]any{"action": "init", "message": "Initial edge creation"},
+		Timestamp:   time.Now(),
+	}
+
+	if err := da.messaging.PublishMessage(da.ctx, "messages", message); err != nil {
+		da.logger.Error("Failed to send initial message", zap.Error(err))
+	} else {
+		da.logger.Debug("Sent initial self-message to create edge",
+			zap.String("agent_id", string(da.agent.ID)),
+		)
+	}
+}
+
+// sendToRole sends a message to any agent with the given role (helper method)
+func (da *DistributedAgent) sendToRole(role string, msgType types.MessageType, payload map[string]any) {
+	// Query topology API to find an agent with the target role
+	targetID := da.findAgentByRole(role)
+	if targetID == "" {
+		// If no agent found with role, pick a random other agent
+		targetID = da.findRandomAgent()
+		if targetID == "" {
+			da.logger.Debug("No other agents available", zap.String("role", role))
+			return
+		}
+	}
+
+	message := &types.Message{
+		ID:          fmt.Sprintf("%s-%d", da.agent.ID, time.Now().UnixNano()),
+		FromAgentID: da.agent.ID,
+		ToAgentID:   targetID,
+		Type:        msgType,
+		Payload:     payload,
+		Timestamp:   time.Now(),
+	}
+
+	if err := da.messaging.PublishMessage(da.ctx, "messages", message); err != nil {
+		da.logger.Error("Failed to send message", zap.Error(err))
+	} else {
+		da.logger.Debug("Sent message",
+			zap.String("to_role", role),
+			zap.String("target", string(targetID)),
+			zap.String("type", string(msgType)),
+		)
+	}
+}
+
+// findAgentByRole queries the topology API to find an agent with the given role
+func (da *DistributedAgent) findAgentByRole(role string) types.AgentID {
+	resp, err := http.Get("http://localhost:8080/api/topology")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	var topologyData struct {
+		Agents map[types.AgentID]*types.Agent `json:"agents"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&topologyData); err != nil {
+		return ""
+	}
+
+	// Find first agent with matching role (excluding self)
+	for id, agent := range topologyData.Agents {
+		if agent.Role == role && id != da.agent.ID {
+			return id
+		}
+	}
+	return ""
+}
+
+// findRandomAgent returns a random agent ID from the topology (excluding self)
+func (da *DistributedAgent) findRandomAgent() types.AgentID {
+	resp, err := http.Get("http://localhost:8080/api/topology")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	var topologyData struct {
+		Agents map[types.AgentID]*types.Agent `json:"agents"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&topologyData); err != nil {
+		return ""
+	}
+
+	// Collect all agents except self
+	var otherAgents []types.AgentID
+	for id := range topologyData.Agents {
+		if id != da.agent.ID {
+			otherAgents = append(otherAgents, id)
+		}
+	}
+
+	if len(otherAgents) == 0 {
+		return ""
+	}
+
+	// Return random agent
+	return otherAgents[time.Now().UnixNano()%int64(len(otherAgents))]
 }
