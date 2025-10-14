@@ -27,10 +27,11 @@ func main() {
 	agentName := flag.String("name", "", "Agent name (required)")
 	agentRole := flag.String("role", "", "Agent role (required)")
 	capabilities := flag.String("capabilities", "", "Comma-separated capabilities")
+	metadata := flag.String("metadata", "", "Comma-separated key:value pairs (e.g., framework:openai,model:gpt-4)")
 	flag.Parse()
 
 	if *agentName == "" || *agentRole == "" {
-		fmt.Println("Usage: agent -name=<name> -role=<role> -capabilities=<cap1,cap2>")
+		fmt.Println("Usage: agent -name=<name> -role=<role> -capabilities=<cap1,cap2> -metadata=<key:value,key:value>")
 		os.Exit(1)
 	}
 
@@ -57,6 +58,7 @@ func main() {
 		Role:         *agentRole,
 		Status:       types.AgentStatusActive,
 		Capabilities: parseCapabilities(*capabilities),
+		Metadata:     parseMetadata(*metadata),
 		CreatedAt:    time.Now(),
 		LastSeenAt:   time.Now(),
 	}
@@ -96,6 +98,24 @@ func parseCapabilities(capStr string) []string {
 		return []string{}
 	}
 	return strings.Split(capStr, ",")
+}
+
+func parseMetadata(metaStr string) map[string]string {
+	metadata := make(map[string]string)
+	if metaStr == "" {
+		return metadata
+	}
+
+	// Parse comma-separated key:value pairs
+	// Example: "framework:openai,model:gpt-4"
+	pairs := strings.Split(metaStr, ",")
+	for _, pair := range pairs {
+		parts := strings.SplitN(pair, ":", 2)
+		if len(parts) == 2 {
+			metadata[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+		}
+	}
+	return metadata
 }
 
 // DistributedAgent is an agent that communicates only via Kafka/Redis (no shared memory)
@@ -342,57 +362,143 @@ func (da *DistributedAgent) simulateBusinessLogic() {
 			if da.agent.Role == "sales" {
 				if counter%2 == 0 {
 					// Send to Inventory agent (role-based, will find any inventory agent)
+					productName := fmt.Sprintf("Product-%d", counter)
 					da.sendToRole("inventory", types.MessageTypeTask, map[string]any{
-						"action":  "check_stock",
-						"product": fmt.Sprintf("Product-%d", counter),
-						"qty":     counter % 10,
+						"action":      "check_stock",
+						"product":     productName,
+						"qty":         counter % 10,
+						"description": fmt.Sprintf("Check stock availability for %s (qty: %d)", productName, counter%10),
 					})
 				}
 				if counter%3 == 0 {
 					// Send to Fraud agent
+					orderID := fmt.Sprintf("ORD-%d", counter)
+					amount := float64(counter * 100)
 					da.sendToRole("fraud", types.MessageTypeTask, map[string]any{
-						"action":   "verify_transaction",
-						"order_id": fmt.Sprintf("ORD-%d", counter),
-						"amount":   float64(counter * 100),
+						"action":      "verify_transaction",
+						"order_id":    orderID,
+						"amount":      amount,
+						"description": fmt.Sprintf("Verify transaction %s ($%.2f)", orderID, amount),
 					})
 				}
 			}
 
-			// Support agent creates tickets and escalates to Sales
+			// Support agent creates tickets and escalates to multiple teams
 			if da.agent.Role == "support" {
+				targets := []string{"sales", "inventory", "fraud"}
+				targetRole := targets[counter%len(targets)]
+
 				if counter%2 == 0 {
-					da.sendToRole("sales", types.MessageTypeTask, map[string]any{
-						"action":     "escalate",
-						"ticket_id":  fmt.Sprintf("TKT-%d", counter),
-						"issue_type": "pricing_complaint",
-					})
-				}
-				if counter%3 == 0 {
-					da.sendToRole("inventory", types.MessageTypeTask, map[string]any{
-						"action":    "check_delivery",
-						"ticket_id": fmt.Sprintf("TKT-%d", counter),
+					ticketID := fmt.Sprintf("TKT-%d", counter)
+					action := "escalate"
+					issueType := "pricing_complaint"
+
+					if targetRole == "inventory" {
+						action = "check_delivery"
+						issueType = "shipping_delay"
+					} else if targetRole == "fraud" {
+						action = "verify_account"
+						issueType = "suspicious_activity"
+					}
+
+					da.sendToRole(targetRole, types.MessageTypeTask, map[string]any{
+						"action":      action,
+						"ticket_id":   ticketID,
+						"issue_type":  issueType,
+						"description": fmt.Sprintf("Support %s for ticket %s - %s", action, ticketID, issueType),
 					})
 				}
 			}
 
 			// Inventory agent notifies Sales and Support
 			if da.agent.Role == "inventory" {
+				targets := []string{"sales", "support"}
+				targetRole := targets[counter%len(targets)]
+
 				if counter%2 == 0 {
-					da.sendToRole("sales", types.MessageTypeTask, map[string]any{
-						"action":  "stock_alert",
-						"product": fmt.Sprintf("Product-%d", counter),
-						"level":   "low",
+					productName := fmt.Sprintf("Product-%d", counter)
+					action := "stock_alert"
+					level := "low"
+
+					if targetRole == "support" {
+						action = "delivery_update"
+						level = "delayed"
+					}
+
+					da.sendToRole(targetRole, types.MessageTypeTask, map[string]any{
+						"action":      action,
+						"product":     productName,
+						"level":       level,
+						"description": fmt.Sprintf("%s for %s - status: %s", action, productName, level),
 					})
 				}
 			}
 
-			// Fraud agent reports to Sales
+			// Fraud agent reports to Sales and Support
 			if da.agent.Role == "fraud" {
+				targets := []string{"sales", "support"}
+				targetRole := targets[counter%len(targets)]
+
 				if counter%3 == 0 {
-					da.sendToRole("sales", types.MessageTypeTask, map[string]any{
-						"action":      "fraud_alert",
-						"transaction": fmt.Sprintf("TXN-%d", counter),
-						"risk_level":  "medium",
+					txnID := fmt.Sprintf("TXN-%d", counter)
+					action := "fraud_alert"
+					riskLevel := "medium"
+
+					if targetRole == "support" {
+						action = "account_suspension"
+						riskLevel = "high"
+					}
+
+					da.sendToRole(targetRole, types.MessageTypeTask, map[string]any{
+						"action":      action,
+						"transaction": txnID,
+						"risk_level":  riskLevel,
+						"description": fmt.Sprintf("%s for transaction %s - risk: %s", action, txnID, riskLevel),
+					})
+				}
+			}
+
+			// Research agent (OpenAI) sends research requests and findings
+			if da.agent.Role == "research" {
+				targets := []string{"sales", "support", "inventory"}
+				targetRole := targets[counter%len(targets)]
+
+				if counter%2 == 0 {
+					da.sendToRole(targetRole, types.MessageTypeTask, map[string]any{
+						"action":      "research_request",
+						"topic":       fmt.Sprintf("market_trend_%d", counter),
+						"priority":    "high",
+						"description": fmt.Sprintf("OpenAI Research: Requesting %s data for market analysis #%d", targetRole, counter),
+					})
+				}
+			}
+
+			// Market Analyst (LangChain) sends analysis reports and forecasts
+			if da.agent.Role == "analyst" {
+				targets := []string{"sales", "inventory", "fraud"}
+				targetRole := targets[counter%len(targets)]
+
+				if counter%2 == 0 {
+					da.sendToRole(targetRole, types.MessageTypeTask, map[string]any{
+						"action":      "analysis_report",
+						"metric":      fmt.Sprintf("kpi_%d", counter),
+						"trend":       "increasing",
+						"description": fmt.Sprintf("LangChain Analyst: Market analysis report #%d for %s", counter, targetRole),
+					})
+				}
+			}
+
+			// Coordinator (Anthropic) sends coordination updates and health checks
+			if da.agent.Role == "coordinator" {
+				targets := []string{"sales", "support", "inventory", "fraud", "research", "analyst"}
+				targetRole := targets[counter%len(targets)]
+
+				if counter%2 == 0 {
+					da.sendToRole(targetRole, types.MessageTypeTask, map[string]any{
+						"action":      "coordination_update",
+						"status":      "all_systems_operational",
+						"check_id":    fmt.Sprintf("health_check_%d", counter),
+						"description": fmt.Sprintf("Anthropic Coordinator: System health check #%d - %s status OK", counter, targetRole),
 					})
 				}
 			}
@@ -407,8 +513,12 @@ func (da *DistributedAgent) sendInitialMessage() {
 		FromAgentID: da.agent.ID,
 		ToAgentID:   da.agent.ID,
 		Type:        types.MessageTypeTask,
-		Payload:     map[string]any{"action": "init", "message": "Initial edge creation"},
-		Timestamp:   time.Now(),
+		Payload: map[string]any{
+			"action":      "init",
+			"message":     "Initial edge creation",
+			"description": fmt.Sprintf("%s agent initializing and joining mesh", da.agent.Name),
+		},
+		Timestamp: time.Now(),
 	}
 
 	if err := da.messaging.PublishMessage(da.ctx, "messages", message); err != nil {

@@ -44,49 +44,39 @@ class ForceDirectedGraph {
     }
 
     render() {
-        // Update links
-        const link = this.linkGroup
+        // FORCE COMPLETE CLEANUP - Remove ALL existing elements first
+        this.linkGroup.selectAll('line').remove();
+        this.nodeGroup.selectAll('circle').remove();
+        this.labelGroup.selectAll('text').remove();
+
+        // Rebuild links from scratch
+        this.linkGroup
             .selectAll('line')
-            .data(this.links, d => `${d.source}-${d.target}`);
-
-        link.exit().remove();
-
-        const linkEnter = link.enter()
+            .data(this.links, d => `${d.source}-${d.target}`)
+            .enter()
             .append('line')
-            .attr('class', 'link');
-
-        link.merge(linkEnter)
+            .attr('class', 'link')
             .attr('stroke-width', d => Math.max(1, d.weight * 5))
             .attr('stroke-opacity', d => 0.3 + (d.weight * 0.7));
 
-        // Update nodes
-        const node = this.nodeGroup
+        // Rebuild nodes from scratch
+        this.nodeGroup
             .selectAll('circle')
-            .data(this.nodes, d => d.id);
-
-        node.exit().remove();
-
-        const nodeEnter = node.enter()
+            .data(this.nodes, d => d.id)
+            .enter()
             .append('circle')
             .attr('r', 20)
+            .attr('class', d => `node ${d.role}`)
             .call(this.drag(this.simulation));
 
-        node.merge(nodeEnter)
-            .attr('class', d => `node ${d.role}`);
-
-        // Update labels
-        const label = this.labelGroup
+        // Rebuild labels from scratch
+        this.labelGroup
             .selectAll('text')
-            .data(this.nodes, d => d.id);
-
-        label.exit().remove();
-
-        const labelEnter = label.enter()
+            .data(this.nodes, d => d.id)
+            .enter()
             .append('text')
             .attr('class', 'node-label')
-            .attr('dy', '.35em');
-
-        label.merge(labelEnter)
+            .attr('dy', '.35em')
             .text(d => d.name);
 
         // Update simulation

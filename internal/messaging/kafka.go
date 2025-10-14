@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -14,10 +15,12 @@ import (
 
 // KafkaMessaging handles Kafka-based message passing
 type KafkaMessaging struct {
-	config  *types.Config
-	logger  *zap.Logger
-	writers map[string]*kafka.Writer
-	readers map[string]*kafka.Reader
+	config    *types.Config
+	logger    *zap.Logger
+	writers   map[string]*kafka.Writer
+	readers   map[string]*kafka.Reader
+	writersMu sync.RWMutex
+	readersMu sync.RWMutex
 }
 
 // NewKafkaMessaging creates a new Kafka messaging system
@@ -34,6 +37,19 @@ func NewKafkaMessaging(config *types.Config, logger *zap.Logger) *KafkaMessaging
 func (km *KafkaMessaging) GetWriter(topic string) *kafka.Writer {
 	fullTopic := km.config.KafkaTopicPrefix + "." + topic
 
+	// Check with read lock first
+	km.writersMu.RLock()
+	if writer, exists := km.writers[fullTopic]; exists {
+		km.writersMu.RUnlock()
+		return writer
+	}
+	km.writersMu.RUnlock()
+
+	// Acquire write lock to create new writer
+	km.writersMu.Lock()
+	defer km.writersMu.Unlock()
+
+	// Double-check after acquiring write lock
 	if writer, exists := km.writers[fullTopic]; exists {
 		return writer
 	}
@@ -57,8 +73,21 @@ func (km *KafkaMessaging) GetWriter(topic string) *kafka.Writer {
 // GetReader gets or creates a Kafka reader for a topic
 func (km *KafkaMessaging) GetReader(topic, groupID string) *kafka.Reader {
 	fullTopic := km.config.KafkaTopicPrefix + "." + topic
-
 	key := fullTopic + ":" + groupID
+
+	// Check with read lock first
+	km.readersMu.RLock()
+	if reader, exists := km.readers[key]; exists {
+		km.readersMu.RUnlock()
+		return reader
+	}
+	km.readersMu.RUnlock()
+
+	// Acquire write lock to create new reader
+	km.readersMu.Lock()
+	defer km.readersMu.Unlock()
+
+	// Double-check after acquiring write lock
 	if reader, exists := km.readers[key]; exists {
 		return reader
 	}
@@ -70,7 +99,7 @@ func (km *KafkaMessaging) GetReader(topic, groupID string) *kafka.Reader {
 		MinBytes:       10e3, // 10KB
 		MaxBytes:       10e6, // 10MB
 		CommitInterval: time.Second,
-		StartOffset:    kafka.LastOffset,
+		StartOffset:    kafka.FirstOffset, // Changed from LastOffset to FirstOffset to consume all historical messages
 	})
 
 	km.readers[key] = reader

@@ -2,6 +2,7 @@ package topology
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -127,15 +128,48 @@ func (g *Graph) GetEdgeBetween(sourceID, targetID types.AgentID) (*types.Edge, e
 }
 
 // ReinforceEdge strengthens an edge (called when message passes through it)
+// If edge doesn't exist, it creates it first (SlimeMold behavior: paths form on first use)
 func (g *Graph) ReinforceEdge(edgeID types.EdgeID) error {
-	g.mu.RLock()
+	g.mu.Lock()
 	edge, exists := g.edges[edgeID]
-	g.mu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("edge %s not found", edgeID)
-	}
+		// Parse edge ID to get source and target
+		// EdgeID format: "sourceID->targetID"
+		parts := strings.Split(string(edgeID), "->")
+		if len(parts) != 2 {
+			g.mu.Unlock()
+			return fmt.Errorf("invalid edge ID format: %s", edgeID)
+		}
 
+		sourceID := types.AgentID(parts[0])
+		targetID := types.AgentID(parts[1])
+
+		// Verify both agents exist
+		if _, exists := g.agents[sourceID]; !exists {
+			g.mu.Unlock()
+			return fmt.Errorf("source agent %s not found", sourceID)
+		}
+		if _, exists := g.agents[targetID]; !exists {
+			g.mu.Unlock()
+			return fmt.Errorf("target agent %s not found", targetID)
+		}
+
+		// Create new edge with initial weight (0.5 - moderate strength)
+		edge = &types.Edge{
+			ID:        edgeID,
+			SourceID:  sourceID,
+			TargetID:  targetID,
+			Weight:    0.5, // Initial weight for new paths
+			Usage:     0,
+			LastUsed:  time.Now(),
+			CreatedAt: time.Now(),
+		}
+		g.edges[edgeID] = edge
+	}
+	g.mu.Unlock()
+
+	// Reinforce the edge (whether newly created or existing)
 	edge.Reinforce(g.config.ReinforcementAmount)
 	return nil
 }

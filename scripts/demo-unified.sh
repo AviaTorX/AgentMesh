@@ -74,7 +74,14 @@ sleep 8
 # Start web visualization
 echo "[START] Launching web UI visualization..."
 cd "$PROJECT_ROOT"
-go run web/server.go > logs/web-ui.log 2>&1 &
+
+# Build web server binary if not exists
+if [ ! -f "bin/web-server" ]; then
+    echo "[BUILD] Building web server..."
+    go build -o bin/web-server web/server.go
+fi
+
+./bin/web-server > logs/web-ui.log 2>&1 &
 WEB_PID=$!
 
 sleep 3

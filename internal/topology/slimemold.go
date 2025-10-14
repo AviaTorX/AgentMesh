@@ -26,7 +26,7 @@ func NewSlimeMoldTopology(config *types.Config, logger *zap.Logger) *SlimeMoldTo
 		graph:     NewGraph(config),
 		config:    config,
 		logger:    logger,
-		eventChan: make(chan types.TopologyEvent, 100),
+		eventChan: make(chan types.TopologyEvent, 500), // Increased from 100 to 500 to handle mass pruning
 		stopCh:    make(chan struct{}),
 	}
 }

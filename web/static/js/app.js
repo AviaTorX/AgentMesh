@@ -27,6 +27,12 @@ wsManager.addListener((data) => {
         case 'consensus':
             handleConsensusEvent(data.event);
             break;
+        case 'message':
+            // Forward to message stream handler
+            if (data.message) {
+                addMessage(data.message);
+            }
+            break;
     }
 });
 
@@ -87,8 +93,33 @@ function updateStatsUI() {
     document.getElementById('quorum-count').textContent = stats.quorumCount;
 }
 
-// Initial load
-fetch('/api/snapshot')
+// Initial load - fetch from API server which has the real topology from Redis
+fetch('http://localhost:8080/api/topology')
     .then(res => res.json())
-    .then(snapshot => handleSnapshot(snapshot))
+    .then(topology => {
+        // Convert API topology format to snapshot format
+        const totalAgents = Object.keys(topology.agents || {}).length;
+        const totalEdges = Object.keys(topology.edges || {}).length;
+        const activeEdges = Object.values(topology.edges || {}).filter(e => e.weight > 0.1).length;
+        const avgWeight = topology.edges ? Object.values(topology.edges).reduce((sum, e) => sum + e.weight, 0) / Object.keys(topology.edges).length : 0;
+
+        // Calculate density and reduction
+        const maxPossibleEdges = totalAgents * (totalAgents - 1);
+        const density = maxPossibleEdges > 0 ? totalEdges / maxPossibleEdges : 0;
+        const reductionPercent = maxPossibleEdges > 0 ? ((maxPossibleEdges - totalEdges) / maxPossibleEdges) * 100 : 0;
+
+        const snapshot = {
+            agents: topology.agents || {},
+            edges: topology.edges || {},
+            stats: {
+                total_agents: totalAgents,
+                total_edges: totalEdges,
+                active_edges: activeEdges,
+                average_weight: avgWeight,
+                reduction_percent: reductionPercent,
+                density: density
+            }
+        };
+        handleSnapshot(snapshot);
+    })
     .catch(err => console.error('Failed to load initial snapshot:', err));

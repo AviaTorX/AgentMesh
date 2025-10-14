@@ -15,7 +15,7 @@ func Load() *types.Config {
 		// Topology settings
 		InitialEdgeWeight:   getEnvFloat("INITIAL_EDGE_WEIGHT", 0.5),
 		ReinforcementAmount: getEnvFloat("REINFORCEMENT_AMOUNT", 0.1),
-		DecayRate:           getEnvFloat("DECAY_RATE", 0.05),
+		DecayRate:           getEnvFloat("DECAY_RATE", 0.02), // Reduced from 0.05 to 0.02 (2% decay per interval)
 		DecayInterval:       getEnvDuration("DECAY_INTERVAL", 5*time.Second),
 		PruneThreshold:      getEnvFloat("PRUNE_THRESHOLD", 0.1),
 
@@ -41,7 +41,7 @@ func Default() *types.Config {
 	return &types.Config{
 		InitialEdgeWeight:   0.5,
 		ReinforcementAmount: 0.1,
-		DecayRate:           0.05,
+		DecayRate:           0.02, // Reduced from 0.05 to 0.02 (2% decay per interval)
 		DecayInterval:       5 * time.Second,
 		PruneThreshold:      0.1,
 

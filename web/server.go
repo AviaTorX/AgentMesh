@@ -165,25 +165,104 @@ func main() {
 		}
 	}()
 
-	// Listen to Kafka for message events to reinforce edges
+	// Listen to Kafka messages and broadcast to WebSocket for live message stream
+	// Note: We don't reinforce edges in the web-server's local topology anymore
+	// because we fetch the real topology from the API server (Redis-backed)
 	go func() {
-		err := kafkaMessaging.ConsumeMessages(ctx, "messages", "web-reinforcement", func(msg *types.Message) error {
-			if err := slimeMold.ReinforceEdge(msg.FromAgentID, msg.ToAgentID); err != nil {
-				logger.Debug("Failed to reinforce edge in web topology", zap.Error(err))
+		err := kafkaMessaging.ConsumeMessages(ctx, "messages", "web-message-stream", func(msg *types.Message) error {
+			// Resolve agent names from IDs
+			fromName := string(msg.FromAgentID)
+			toName := string(msg.ToAgentID)
+
+			graph := slimeMold.GetGraph()
+			if fromAgent, err := graph.GetAgent(msg.FromAgentID); err == nil {
+				fromName = fromAgent.Name
+			}
+			if toAgent, err := graph.GetAgent(msg.ToAgentID); err == nil {
+				toName = toAgent.Name
+			}
+
+			// Broadcast message to all WebSocket clients with agent names
+			hub.broadcast <- map[string]interface{}{
+				"type": "message",
+				"message": map[string]interface{}{
+					"from":      msg.FromAgentID,
+					"to":        msg.ToAgentID,
+					"fromName":  fromName,
+					"toName":    toName,
+					"type":      msg.Type,
+					"payload":   msg.Payload,
+					"timestamp": msg.Timestamp,
+				},
 			}
 			return nil
 		})
 		if err != nil && err != context.Canceled {
-			logger.Error("Message listener stopped", zap.Error(err))
+			logger.Error("Message stream listener stopped", zap.Error(err))
 		}
 	}()
 
-	// Periodically broadcast topology snapshot
+	// Periodically broadcast topology snapshot from API server (Redis-backed)
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			snapshot := slimeMold.GetSnapshot()
+			// Fetch real topology from API server
+			resp, err := http.Get("http://localhost:8080/api/topology")
+			if err != nil {
+				logger.Debug("Failed to fetch topology from API server", zap.Error(err))
+				continue
+			}
+			defer resp.Body.Close()
+
+			var topology struct {
+				Agents map[types.AgentID]*types.Agent          `json:"agents"`
+				Edges  map[string]map[string]interface{}       `json:"edges"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&topology); err != nil {
+				logger.Debug("Failed to decode topology", zap.Error(err))
+				continue
+			}
+
+			// Calculate stats
+			totalAgents := len(topology.Agents)
+			totalEdges := len(topology.Edges)
+			activeEdges := 0
+			var totalWeight float64
+			for _, edge := range topology.Edges {
+				weight := edge["weight"].(float64)
+				if weight > 0.1 {
+					activeEdges++
+				}
+				totalWeight += weight
+			}
+			avgWeight := 0.0
+			if totalEdges > 0 {
+				avgWeight = totalWeight / float64(totalEdges)
+			}
+
+			// Calculate density and reduction
+			maxPossibleEdges := totalAgents * (totalAgents - 1)
+			density := 0.0
+			reductionPercent := 0.0
+			if maxPossibleEdges > 0 {
+				density = float64(totalEdges) / float64(maxPossibleEdges)
+				reductionPercent = (float64(maxPossibleEdges-totalEdges) / float64(maxPossibleEdges)) * 100.0
+			}
+
+			snapshot := map[string]interface{}{
+				"agents": topology.Agents,
+				"edges":  topology.Edges,
+				"stats": map[string]interface{}{
+					"total_agents":      totalAgents,
+					"total_edges":       totalEdges,
+					"active_edges":      activeEdges,
+					"average_weight":    avgWeight,
+					"reduction_percent": reductionPercent,
+					"density":           density,
+				},
+			}
+
 			hub.broadcast <- map[string]interface{}{
 				"type":     "snapshot",
 				"snapshot": snapshot,

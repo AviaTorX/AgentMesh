@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,6 +26,94 @@ import (
 // 4. All sharing knowledge in the same mesh
 //
 // This demonstrates the INTEROPERABILITY requirement of the challenge
+
+// AgentRegistry tracks all agents in the mesh for role-to-ID resolution
+type AgentRegistry struct {
+	agents map[string]*types.Agent // agentID -> Agent
+	roles  map[string]types.AgentID // role -> agentID (first agent with that role)
+	mu     sync.RWMutex
+	logger *zap.Logger
+}
+
+// NewAgentRegistry creates and starts an agent registry
+func NewAgentRegistry(messaging *messaging.KafkaMessaging, ctx context.Context, logger *zap.Logger) *AgentRegistry {
+	registry := &AgentRegistry{
+		agents: make(map[string]*types.Agent),
+		roles:  make(map[string]types.AgentID),
+		logger: logger,
+	}
+
+	// Start listening to topology events
+	go func() {
+		err := messaging.ConsumeTopologyEvents(ctx, "topology", "agent-registry", func(event types.TopologyEvent) error {
+			registry.handleTopologyEvent(event)
+			return nil
+		})
+		if err != nil && err != context.Canceled {
+			logger.Error("Agent registry topology listener stopped", zap.Error(err))
+		}
+	}()
+
+	logger.Info("Agent registry started")
+	return registry
+}
+
+// handleTopologyEvent processes topology events and updates registry
+func (ar *AgentRegistry) handleTopologyEvent(event types.TopologyEvent) {
+	ar.mu.Lock()
+	defer ar.mu.Unlock()
+
+	switch event.Type {
+	case types.TopologyEventAgentJoined:
+		if event.Agent != nil {
+			agentIDStr := string(event.Agent.ID)
+			ar.agents[agentIDStr] = event.Agent
+
+			// Map role to agent ID (first agent with this role wins)
+			if _, exists := ar.roles[event.Agent.Role]; !exists {
+				ar.roles[event.Agent.Role] = event.Agent.ID
+				ar.logger.Debug("Registered agent role mapping",
+					zap.String("role", event.Agent.Role),
+					zap.String("agent_id", agentIDStr),
+					zap.String("agent_name", event.Agent.Name),
+				)
+			}
+		}
+
+	case types.TopologyEventAgentLeft:
+		agentIDStr := string(event.AgentID)
+		if agent, exists := ar.agents[agentIDStr]; exists {
+			delete(ar.agents, agentIDStr)
+
+			// If this was the primary role mapping, clear it
+			if ar.roles[agent.Role] == event.AgentID {
+				delete(ar.roles, agent.Role)
+			}
+		}
+	}
+}
+
+// GetAgentByRole returns the agent ID for a given role, or empty if not found
+func (ar *AgentRegistry) GetAgentByRole(role string) types.AgentID {
+	ar.mu.RLock()
+	defer ar.mu.RUnlock()
+
+	if agentID, exists := ar.roles[role]; exists {
+		return agentID
+	}
+	return types.AgentID("")
+}
+
+// GetAgentNameByID returns the agent name for a given ID, or the ID itself if not found
+func (ar *AgentRegistry) GetAgentNameByID(agentID types.AgentID) string {
+	ar.mu.RLock()
+	defer ar.mu.RUnlock()
+
+	if agent, exists := ar.agents[string(agentID)]; exists {
+		return agent.Name
+	}
+	return string(agentID) // Fallback to ID if not found
+}
 
 func main() {
 	// Initialize logger
@@ -259,6 +348,23 @@ func main() {
 	logger.Info("🎉 Multi-Framework Interoperability Demonstrated!")
 	logger.Info("")
 
+	// ========================================
+	// Start Periodic Messaging for All Agents
+	// ========================================
+	logger.Info("Starting periodic agent messaging...")
+	logger.Info("")
+
+	// Create agent registry for role-to-ID resolution
+	agentRegistry := NewAgentRegistry(messaging, ctx, logger)
+
+	// Give registry time to populate from topology events
+	time.Sleep(3 * time.Second)
+
+	// Start periodic messaging for each agent
+	go startNativeCoordinatorMessaging(nativeAgent, agentRegistry, messaging, ctx, logger)
+	go startOpenAIAgentMessaging(openaiAdapter, agentRegistry, messaging, ctx, logger)
+	go startLangChainAgentMessaging(langchainAdapter, agentRegistry, messaging, ctx, logger)
+
 	// Keep running until interrupted
 	logger.Info("Press Ctrl+C to stop...")
 	logger.Info("")
@@ -301,4 +407,143 @@ func createNativeAgent(messaging *messaging.KafkaMessaging, cfg *types.Config, l
 	)
 
 	return agent
+}
+
+// startNativeCoordinatorMessaging starts periodic messaging for the native coordinator
+func startNativeCoordinatorMessaging(agent *types.Agent, registry *AgentRegistry, messaging *messaging.KafkaMessaging, ctx context.Context, logger *zap.Logger) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	counter := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			counter++
+
+			// Coordinator broadcasts status updates every 15 seconds
+			// Rotate between target agents
+			targets := []string{"sales", "support", "inventory", "fraud"}
+			targetRole := targets[counter%len(targets)]
+
+			// CRITICAL: Resolve role to actual agent ID
+			targetAgentID := registry.GetAgentByRole(targetRole)
+			if targetAgentID == "" {
+				logger.Debug("Coordinator cannot find agent for role", zap.String("role", targetRole))
+				continue
+			}
+
+			msg := &types.Message{
+				ID:          fmt.Sprintf("%s-%d", agent.ID, time.Now().UnixNano()),
+				FromAgentID: agent.ID,
+				ToAgentID:   targetAgentID, // Use resolved agent ID
+				Type:        types.MessageTypeTask,
+				Payload: map[string]any{
+					"action":      "coordination_update",
+					"status":      "coordinating",
+					"description": fmt.Sprintf("Coordinator status check #%d - All agents operational", counter),
+				},
+				Timestamp: time.Now(),
+			}
+
+			messaging.PublishMessage(ctx, "messages", msg)
+			logger.Debug("Coordinator sent message",
+				zap.String("target_role", targetRole),
+				zap.String("target_agent_id", string(targetAgentID)),
+			)
+		}
+	}
+}
+
+// startOpenAIAgentMessaging starts periodic messaging for the OpenAI research agent
+func startOpenAIAgentMessaging(adapter *adapters.OpenAIAdapter, registry *AgentRegistry, messaging *messaging.KafkaMessaging, ctx context.Context, logger *zap.Logger) {
+	ticker := time.NewTicker(18 * time.Second)
+	defer ticker.Stop()
+
+	counter := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			counter++
+
+			// Research agent requests data and shares findings
+			targets := []string{"sales", "support"}
+			targetRole := targets[counter%len(targets)]
+
+			// CRITICAL: Resolve role to actual agent ID
+			targetAgentID := registry.GetAgentByRole(targetRole)
+			if targetAgentID == "" {
+				logger.Debug("OpenAI agent cannot find agent for role", zap.String("role", targetRole))
+				continue
+			}
+
+			msg := &types.Message{
+				ID:          fmt.Sprintf("%s-%d", adapter.GetAgent().ID, time.Now().UnixNano()),
+				FromAgentID: adapter.GetAgent().ID,
+				ToAgentID:   targetAgentID, // Use resolved agent ID
+				Type:        types.MessageTypeTask,
+				Payload: map[string]any{
+					"action":      "research_request",
+					"topic":       fmt.Sprintf("market_trend_%d", counter),
+					"description": fmt.Sprintf("OpenAI Research: Requesting %s data for analysis #%d", targetRole, counter),
+				},
+				Timestamp: time.Now(),
+			}
+
+			messaging.PublishMessage(ctx, "messages", msg)
+			logger.Debug("OpenAI agent sent message",
+				zap.String("target_role", targetRole),
+				zap.String("target_agent_id", string(targetAgentID)),
+			)
+		}
+	}
+}
+
+// startLangChainAgentMessaging starts periodic messaging for the LangChain analyst agent
+func startLangChainAgentMessaging(adapter *adapters.LangChainAdapter, registry *AgentRegistry, messaging *messaging.KafkaMessaging, ctx context.Context, logger *zap.Logger) {
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+
+	counter := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			counter++
+
+			// Analyst agent provides insights to other agents
+			targets := []string{"sales", "inventory", "fraud"}
+			targetRole := targets[counter%len(targets)]
+
+			// CRITICAL: Resolve role to actual agent ID
+			targetAgentID := registry.GetAgentByRole(targetRole)
+			if targetAgentID == "" {
+				logger.Debug("LangChain agent cannot find agent for role", zap.String("role", targetRole))
+				continue
+			}
+
+			msg := &types.Message{
+				ID:          fmt.Sprintf("%s-%d", adapter.GetAgent().ID, time.Now().UnixNano()),
+				FromAgentID: adapter.GetAgent().ID,
+				ToAgentID:   targetAgentID, // Use resolved agent ID
+				Type:        types.MessageTypeTask,
+				Payload: map[string]any{
+					"action":      "analysis_report",
+					"metric":      fmt.Sprintf("kpi_%d", counter),
+					"description": fmt.Sprintf("LangChain Analyst: Sharing analysis report #%d with %s", counter, targetRole),
+				},
+				Timestamp: time.Now(),
+			}
+
+			messaging.PublishMessage(ctx, "messages", msg)
+			logger.Debug("LangChain agent sent message",
+				zap.String("target_role", targetRole),
+				zap.String("target_agent_id", string(targetAgentID)),
+			)
+		}
+	}
 }
