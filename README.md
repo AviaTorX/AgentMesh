@@ -108,16 +108,11 @@ The topology starts with ~42 possible edges (7 agents × 6 connections) and opti
 
 ## 🎥 Demo Video
 
-> **📹 Coming Soon**: Full system demonstration including live topology optimization, multi-framework agents, and distributed consensus in action.
+Watch the complete AgentMesh Cortex system in action - live topology optimization, multi-framework agents, and distributed consensus:
 
-<!-- Embed video here after upload -->
-<!-- Example for YouTube:
-[![AgentMesh Cortex Demo](https://img.youtube.com/vi/YOUR_VIDEO_ID/maxresdefault.jpg)](https://www.youtube.com/watch?v=YOUR_VIDEO_ID)
--->
+[![AgentMesh Cortex - Live Demo](https://img.youtube.com/vi/AlXae2wWiqY/maxresdefault.jpg)](https://www.youtube.com/watch?v=AlXae2wWiqY)
 
-<!-- Example for Loom:
-<div style="position: relative; padding-bottom: 56.25%; height: 0;"><iframe src="https://www.loom.com/embed/YOUR_VIDEO_ID" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></iframe></div>
--->
+**🎬 [Click to watch full demonstration on YouTube →](https://www.youtube.com/watch?v=AlXae2wWiqY)**
 
 ### What You'll See in the Video
 
